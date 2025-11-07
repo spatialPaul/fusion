@@ -29,11 +29,11 @@ class NuvoloConfig:
             return value
 
         return cls(
-            instance_url=_env("INSTANCE_URL"),
-            client_id=_env("CLIENT_ID"),
-            client_secret=_env("CLIENT_SECRET"),
-            username=_env("USERNAME"),
-            password=_env("PASSWORD"),
+            instance_url=_env("INSTANCE_URL") or "",
+            client_id=_env("CLIENT_ID") or "",
+            client_secret=_env("CLIENT_SECRET") or "",
+            username=_env("USERNAME") or "",
+            password=_env("PASSWORD") or "",
             api_path=_env("API_PATH", optional=True) or "/api/x_nuvo_cmdb/leases",
         )
 

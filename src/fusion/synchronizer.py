@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from .arcgis_client import ArcGISClient
 from .associations import LeaseAssociation, LeaseAssociationStore
@@ -41,31 +41,88 @@ class LeaseSynchronizer:
 
     def _push_to_arcgis(self, leases: Iterable[LeaseRecord]) -> dict:
         lease_list = list(leases)
-        features = [lease.to_arcgis_feature() for lease in lease_list]
-        response = self.arcgis.upsert_leases(features)
-        update_results = response.get("updateResults") or response.get("addResults") or []
-        for lease, result in zip(lease_list, update_results):
-            global_id = result.get("globalId") if isinstance(result, dict) else None
-            object_id = result.get("objectId") if isinstance(result, dict) else None
-            if not global_id:
-                continue
-            geometry_type = None
-            if lease.geometry and isinstance(lease.geometry, dict):
-                geometry_type = lease.geometry.get("geometryType")
-            if geometry_type is None and lease.latitude is not None:
-                geometry_type = "point"
+        additions: List[LeaseRecord] = []
+        add_features: List[dict] = []
+        updates: List[Tuple[LeaseRecord, LeaseAssociation]] = []
+        update_features: List[dict] = []
 
-            association = LeaseAssociation(
-                lease_id=lease.lease_id,
-                feature_global_id=global_id,
-                feature_object_id=object_id,
-                building_id=lease.building_id,
-                level_id=lease.level_id,
-                unit_id=lease.unit_id,
-                geometry_type=geometry_type,
-            )
-            self.associations.upsert(association)
+        for lease in lease_list:
+            association = self.associations.get(lease.lease_id)
+            feature = lease.to_arcgis_feature(association)
+            if association is None:
+                additions.append(lease)
+                add_features.append(feature)
+            else:
+                updates.append((lease, association))
+                update_features.append(feature)
+
+        response = self.arcgis.upsert_leases(adds=add_features, updates=update_features)
+        self._persist_results(additions, updates, response)
         return response
+
+    def _persist_results(
+        self,
+        additions: Sequence[LeaseRecord],
+        updates: Sequence[Tuple[LeaseRecord, LeaseAssociation]],
+        response: dict,
+    ) -> None:
+        timestamp = datetime.utcnow()
+
+        add_results = response.get("addResults") or []
+        for lease, result in zip(additions, add_results):
+            association = self._build_association(lease, result, timestamp)
+            if association:
+                self.associations.upsert(association)
+
+        update_results = response.get("updateResults") or []
+        for (lease, existing), result in zip(updates, update_results):
+            association = self._build_association(
+                lease,
+                result,
+                timestamp,
+                fallback=existing,
+            )
+            if association:
+                self.associations.upsert(association)
+
+    def _build_association(
+        self,
+        lease: LeaseRecord,
+        result: object,
+        timestamp: datetime,
+        *,
+        fallback: Optional[LeaseAssociation] = None,
+    ) -> Optional[LeaseAssociation]:
+        if not isinstance(result, dict) or not result.get("success", True):
+            return None
+
+        global_id = result.get("globalId") or result.get("globalID")
+        object_id = result.get("objectId")
+
+        if fallback is not None:
+            global_id = global_id or fallback.feature_global_id
+            if object_id is None:
+                object_id = fallback.feature_object_id
+
+        if not global_id:
+            return None
+
+        geometry_type = None
+        if lease.geometry and isinstance(lease.geometry, dict):
+            geometry_type = lease.geometry.get("geometryType")
+        if geometry_type is None and lease.latitude is not None:
+            geometry_type = "point"
+
+        return LeaseAssociation(
+            lease_id=lease.lease_id,
+            feature_global_id=str(global_id),
+            feature_object_id=object_id if object_id is None else int(object_id),
+            building_id=lease.building_id,
+            level_id=lease.level_id,
+            unit_id=lease.unit_id,
+            geometry_type=geometry_type,
+            last_synced=timestamp,
+        )
 
 
 __all__ = ["LeaseSynchronizer"]

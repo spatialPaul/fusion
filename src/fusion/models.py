@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - only for type checkers
+    from .associations import LeaseAssociation
 
 
 @dataclass(slots=True)
@@ -28,7 +31,10 @@ class LeaseRecord:
     geometry: Optional[Dict[str, object]] = None
     attributes: Dict[str, str] = field(default_factory=dict)
 
-    def to_arcgis_feature(self) -> Dict[str, object]:
+    def to_arcgis_feature(
+        self,
+        association: "LeaseAssociation | None" = None,
+    ) -> Dict[str, object]:
         """Convert the record into an ArcGIS feature payload."""
 
         attributes = {
@@ -55,6 +61,12 @@ class LeaseRecord:
         if self.unit_id:
             attributes["UNIT_ID"] = self.unit_id
         attributes.update(self.attributes)
+
+        if association is not None:
+            if association.feature_object_id is not None:
+                attributes["OBJECTID"] = association.feature_object_id
+            if association.feature_global_id:
+                attributes.setdefault("GlobalID", association.feature_global_id)
 
         geometry = self.geometry
         if geometry is None and self.latitude is not None and self.longitude is not None:

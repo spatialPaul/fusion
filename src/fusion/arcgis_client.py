@@ -74,22 +74,44 @@ class ArcGISClient:
     def _features_url(self, action: str) -> str:
         return f"{self.config.feature_service_url}/{action}"
 
-    def upsert_leases(self, features: Iterable[Dict[str, object]]) -> Dict[str, object]:
+    def upsert_leases(
+        self,
+        *,
+        adds: Optional[Iterable[Dict[str, object]]] = None,
+        updates: Optional[Iterable[Dict[str, object]]] = None,
+        deletes: Optional[Iterable[str]] = None,
+    ) -> Dict[str, object]:
         token = self._ensure_token()
-        feature_list = list(features)
-        serialized_features = json.dumps(feature_list)
+        payload = {
+            "f": "json",
+            "token": token,
+            "adds": json.dumps(list(adds or [])),
+            "updates": json.dumps(list(updates or [])),
+        }
+        if deletes:
+            payload["deletes"] = ",".join(deletes)
+
         response = self.session.post(
             self._features_url("applyEdits"),
-            data={
-                "f": "json",
-                "token": token,
-                "adds": "[]",
-                "updates": serialized_features,
-            },
+            data=payload,
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        self._raise_if_errors(result)
+        return result
+
+    @staticmethod
+    def _raise_if_errors(result: Dict[str, object]) -> None:
+        errors: List[Dict[str, object]] = []
+        for key in ("addResults", "updateResults", "deleteResults"):
+            entries = result.get(key)
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict) and not entry.get("success", True):
+                        errors.append(entry)
+        if errors:
+            raise RuntimeError(f"ArcGIS applyEdits reported failures: {errors}")
 
     def query_by_lease_ids(self, lease_ids: List[str]) -> Dict[str, object]:
         if not lease_ids:

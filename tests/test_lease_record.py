@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from fusion.associations import LeaseAssociation
 from fusion.models import LeaseRecord
 
 
@@ -61,3 +62,17 @@ def test_geometry_precedence_over_lat_lon() -> None:
     feature = lease.to_arcgis_feature()
     assert feature["geometry"]["spatialReference"] == {"wkid": 3857}
     assert "x" not in feature["geometry"]
+
+
+def test_to_arcgis_feature_respects_existing_association() -> None:
+    lease = LeaseRecord(lease_id="lease-1", name="HQ", status="active")
+    association = LeaseAssociation(
+        lease_id="lease-1",
+        feature_global_id="{ABCDEF}",
+        feature_object_id=77,
+    )
+
+    feature = lease.to_arcgis_feature(association)
+    attrs = feature["attributes"]
+    assert attrs["OBJECTID"] == 77
+    assert attrs["GlobalID"] == "{ABCDEF}"

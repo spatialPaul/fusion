@@ -35,7 +35,7 @@ def test_sync_from_nuvolo_persists_associations() -> None:
 
     arcgis = MagicMock(spec=ArcGISClient)
     arcgis.upsert_leases.return_value = {
-        "updateResults": [
+        "addResults": [
             {"success": True, "globalId": "{ABC}", "objectId": 10},
         ]
     }
@@ -45,7 +45,47 @@ def test_sync_from_nuvolo_persists_associations() -> None:
 
     synchronizer.sync_from_nuvolo(updated_since=datetime(2024, 1, 1))
 
+    arcgis.upsert_leases.assert_called_once()
+    kwargs = arcgis.upsert_leases.call_args.kwargs
+    assert kwargs["adds"][0]["attributes"]["LEASE_ID"] == "1"
+    assert kwargs["updates"] == []
+
     assert "1" in store.items
     association = store.items["1"]
     assert association.feature_global_id == "{ABC}"
     assert association.feature_object_id == 10
+
+
+def test_existing_association_updates_feature() -> None:
+    lease = LeaseRecord(lease_id="1", name="Lease", status="active")
+
+    nuvolo = MagicMock(spec=NuvoloClient)
+    nuvolo.iter_leases.return_value = [lease]
+
+    arcgis = MagicMock(spec=ArcGISClient)
+    arcgis.upsert_leases.return_value = {
+        "updateResults": [
+            {"success": True, "globalId": "{EXISTING}", "objectId": 11},
+        ]
+    }
+
+    store = DummyStore()
+    store.upsert(
+        LeaseAssociation(
+            lease_id="1",
+            feature_global_id="{ORIGINAL}",
+            feature_object_id=9,
+        )
+    )
+
+    synchronizer = LeaseSynchronizer(nuvolo, arcgis, store)
+    synchronizer.sync_from_nuvolo(updated_since=datetime(2024, 1, 1))
+
+    kwargs = arcgis.upsert_leases.call_args.kwargs
+    assert kwargs["adds"] == []
+    update_feature = kwargs["updates"][0]
+    assert update_feature["attributes"]["OBJECTID"] == 9
+
+    association = store.items["1"]
+    assert association.feature_global_id == "{EXISTING}"
+    assert association.feature_object_id == 11
