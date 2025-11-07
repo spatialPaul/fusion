@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Iterator, Optional
-
-import requests
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
 
 from .config import NuvoloConfig
 from .models import LeaseRecord
+
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from requests import Session  # noqa: F401
+else:
+    Session = Any
+
+
+def _default_session() -> Session:
+    try:
+        import requests  # type: ignore import-not-found
+    except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
+        raise RuntimeError(
+            "The 'requests' package is required to use NuvoloClient"
+        ) from exc
+
+    session: Session = requests.Session()
+    session.headers.update({"User-Agent": "fusion-nuvolo-client/1.0"})
+    return session
 
 
 @dataclass
@@ -17,6 +35,7 @@ class NuvoloClient:
     """Lightweight client that wraps Nuvolo REST API calls."""
 
     config: NuvoloConfig
+    session: Session = field(default_factory=_default_session)
 
     def _token_url(self) -> str:
         return f"{self.config.instance_url}/oauth_token.do"
@@ -25,7 +44,7 @@ class NuvoloClient:
         return f"{self.config.instance_url}{self.config.api_path}"
 
     def _authenticate(self) -> str:
-        response = requests.post(
+        response = self.session.post(
             self._token_url(),
             data={
                 "grant_type": "password",
@@ -38,7 +57,10 @@ class NuvoloClient:
         )
         response.raise_for_status()
         payload = response.json()
-        return payload["access_token"]
+        token = payload.get("access_token")
+        if not token:
+            raise RuntimeError(f"Nuvolo authentication failed: {payload}")
+        return token
 
     def iter_leases(
         self,
@@ -63,7 +85,7 @@ class NuvoloClient:
 
         url = self._api_url()
         while url:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = self.session.get(url, headers=headers, params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
             for item in data.get("result", []):
@@ -101,9 +123,20 @@ class NuvoloClient:
                 "building_id",
                 "level_id",
                 "unit_id",
+                "geometry",
             }
             and value not in (None, "")
         }
+
+        geometry: Optional[Dict[str, object]] = None
+        geometry_payload = payload.get("geometry")
+        if isinstance(geometry_payload, dict):
+            geometry = geometry_payload
+        elif isinstance(geometry_payload, str):
+            try:
+                geometry = json.loads(geometry_payload)
+            except json.JSONDecodeError:
+                geometry = None
 
         return LeaseRecord(
             lease_id=str(payload["sys_id"]),
@@ -120,6 +153,7 @@ class NuvoloClient:
             building_id=payload.get("building_id"),
             level_id=payload.get("level_id"),
             unit_id=payload.get("unit_id"),
+            geometry=geometry,
             attributes=attributes,
         )
 
@@ -128,7 +162,7 @@ class NuvoloClient:
 
         token = self._authenticate()
         headers = {"Authorization": f"Bearer {token}"}
-        response = requests.patch(
+        response = self.session.patch(
             f"{self._api_url()}/{lease_id}",
             headers=headers,
             json=payload,

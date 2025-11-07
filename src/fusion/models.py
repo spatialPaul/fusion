@@ -25,6 +25,7 @@ class LeaseRecord:
     building_id: Optional[str] = None
     level_id: Optional[str] = None
     unit_id: Optional[str] = None
+    geometry: Optional[Dict[str, object]] = None
     attributes: Dict[str, str] = field(default_factory=dict)
 
     def to_arcgis_feature(self) -> Dict[str, object]:
@@ -55,9 +56,13 @@ class LeaseRecord:
             attributes["UNIT_ID"] = self.unit_id
         attributes.update(self.attributes)
 
-        geometry = None
-        if self.latitude is not None and self.longitude is not None:
-            geometry = {"x": self.longitude, "y": self.latitude, "spatialReference": {"wkid": 4326}}
+        geometry = self.geometry
+        if geometry is None and self.latitude is not None and self.longitude is not None:
+            geometry = {
+                "x": self.longitude,
+                "y": self.latitude,
+                "spatialReference": {"wkid": 4326},
+            }
 
         return {"attributes": attributes, "geometry": geometry}
 
