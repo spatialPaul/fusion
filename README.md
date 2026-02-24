@@ -1,38 +1,66 @@
 # Custom Run Route Planner (PostGIS + Python + MapLibre)
 
-This repository contains a starter architecture for a **loop-running route planner**.
-Given a start point and target distance, the API returns 2–3 loop options by searching a street/trail network in PostGIS.
+This project is a runnable starter for a **loop-running route planner**.
+Given a start point and target distance, the API returns 2–3 route options and renders them on a simple MapLibre UI.
+
+## What you can see right now
+
+- A local web UI at `http://localhost:8000/`.
+- A form to submit start point + target distance.
+- A map that draws returned routes in 3 colors.
+
+> Current route results are still scaffold-level placeholders from network edges. The plumbing is ready for real pgRouting loop assembly.
 
 ## Stack
 
-- **PostgreSQL + PostGIS**: stores road/trail graph and runs spatial queries.
-- **pgRouting**: shortest-path and cost matrix functions over network edges.
-- **GDAL/ogr2ogr + osm2pgsql**: import OpenStreetMap data.
-- **Python (FastAPI + psycopg)**: API orchestration + loop candidate selection.
-- **MapLibre GL JS**: client-side rendering of route options.
+- PostgreSQL + PostGIS
+- pgRouting
+- Python (FastAPI + psycopg)
+- MapLibre GL JS
+- OSM ingestion with GDAL/osm2pgsql (workflow documented below)
 
-## Project Layout
+## Run it locally
 
-- `app/main.py` – FastAPI service exposing `POST /run-routes`.
-- `sql/schema.sql` – network schema and indexes.
-- `sql/loop_query.sql` – SQL approach for loop candidate assembly.
-- `docker-compose.yml` – local PostGIS + pgRouting setup.
-
-## Quick Start
-
-1. Start PostGIS locally:
+### 1) Start database
 
 ```bash
 docker compose up -d db
 ```
 
-2. Apply schema:
+### 2) Initialize schema
 
 ```bash
 docker exec -i fusion-db psql -U postgres -d routes < sql/schema.sql
 ```
 
-3. Import OSM network data (example with `osm2pgsql`):
+### 3) Install Python deps and run API/UI
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+### 4) Open the app
+
+Visit:
+
+- `http://localhost:8000/` (visual app)
+- `http://localhost:8000/docs` (Swagger API docs)
+- `http://localhost:8000/health`
+
+## API example
+
+```bash
+curl -X POST http://localhost:8000/run-routes \
+  -H 'content-type: application/json' \
+  -d '{"start_lat": 40.734, "start_lon": -73.994, "target_distance_km": 8, "options": 3}'
+```
+
+## OSM ingest notes
+
+Example import with `osm2pgsql`:
 
 ```bash
 osm2pgsql \
@@ -46,56 +74,14 @@ osm2pgsql \
   your-city.osm.pbf
 ```
 
-4. Transform imported roads into routing edges (sample SQL in `sql/schema.sql`).
+Then convert imported lines to `run_edges` and generate `run_vertices` + topology for pgRouting.
 
-5. Start API:
+## Next step to make routes real
 
-```bash
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+Replace the placeholder SQL with:
 
-6. Request route options:
-
-```bash
-curl -X POST http://localhost:8000/run-routes \
-  -H 'content-type: application/json' \
-  -d '{"start_lat": 40.734, "start_lon": -73.994, "target_distance_km": 8, "options": 3}'
-```
-
-## How loop generation works
-
-1. **Snap start point** to nearest graph node.
-2. Compute a **search radius** from target distance (roughly target / π).
-3. Pick candidate waypoints at varied bearings and distance ratios.
-4. Build loops as:
-   - start → waypoint A
-   - waypoint A → waypoint B
-   - waypoint B → start
-5. Score each loop by:
-   - distance error from target
-   - overlap penalty (prefer variety)
-   - optional elevation/surface preferences
-6. Return best 2–3 options.
-
-## MapLibre integration sketch
-
-Use API response `LineString` GeoJSON features and render each candidate route with a different style layer:
-
-```js
-map.addSource('run-routes', { type: 'geojson', data: featureCollection });
-map.addLayer({
-  id: 'route-1',
-  type: 'line',
-  source: 'run-routes',
-  paint: { 'line-color': '#ff4d4d', 'line-width': 5 },
-  filter: ['==', ['get', 'route_id'], 1]
-});
-```
-
-## Next enhancements
-
-- Add slope-aware costs using DEM rasters via GDAL.
-- Add safety filters (lit roads, parks, trails).
-- Add user preferences (avoid traffic, maximize park coverage).
-- Cache route computations with Redis.
+1. Snap start to nearest vertex.
+2. Select waypoint candidates around target radius.
+3. Build 3-leg loops via `pgr_dijkstra`.
+4. Score by distance error + overlap penalty.
+5. Return top 2–3 unique loops as GeoJSON.

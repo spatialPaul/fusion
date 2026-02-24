@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
 import psycopg
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 
-app = FastAPI(title="Run Loop Planner", version="0.1.0")
+app = FastAPI(title="Run Loop Planner", version="0.2.0")
 
 
 class RunRouteRequest(BaseModel):
@@ -45,21 +48,28 @@ def fetch_loop_candidates(req: RunRouteRequest, settings: Settings) -> list[Rout
       ORDER BY v.geom <-> s.geom
       LIMIT 1
     ),
-    random_edges AS (
-      SELECT id, geom, ST_Length(geom::geography) AS distance_m
-      FROM run_edges
-      ORDER BY random()
-      LIMIT %(options)s
+    candidate_edges AS (
+      SELECT
+        e.id,
+        e.geom,
+        ST_Length(e.geom::geography) AS distance_m,
+        abs(ST_Length(e.geom::geography) - (%(target_m)s / %(options)s)) AS distance_delta
+      FROM run_edges e
+      JOIN nearest_start n ON TRUE
+      ORDER BY e.geom <-> (SELECT geom FROM start_point), distance_delta
+      LIMIT 50
     )
     SELECT
-      row_number() over() AS route_id,
+      row_number() OVER () AS route_id,
       distance_m,
       ST_AsGeoJSON(geom)::jsonb AS geojson
-    FROM random_edges;
+    FROM candidate_edges
+    ORDER BY distance_delta
+    LIMIT %(options)s;
     """
 
     try:
-      with psycopg.connect(settings.db_url) as conn:
+        with psycopg.connect(settings.db_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     query,
@@ -78,6 +88,16 @@ def fetch_loop_candidates(req: RunRouteRequest, settings: Settings) -> list[Rout
         RouteOption(route_id=row[0], distance_m=float(row[1]), geojson=row[2])
         for row in rows
     ]
+
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/health")
