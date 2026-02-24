@@ -1,0 +1,15 @@
+services:
+  db:
+    image: pgrouting/pgrouting:16-3.5-3.4.2
+    container_name: fusion-db
+    environment:
+      POSTGRES_DB: routes
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

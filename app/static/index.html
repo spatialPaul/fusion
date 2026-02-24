@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Run Loop Planner</title>
+    <link
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      body { margin: 0; font-family: sans-serif; }
+      #app { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
+      #panel { padding: 12px; border-right: 1px solid #ddd; }
+      #map { height: 100%; }
+      label { display:block; margin-top: 10px; }
+      input, button { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+      .note { color: #666; font-size: 12px; margin-top: 8px; }
+      ul { padding-left: 18px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="panel">
+        <h2>Run Loop Planner</h2>
+        <label>Latitude <input id="lat" type="number" value="40.734" step="0.0001" /></label>
+        <label>Longitude <input id="lon" type="number" value="-73.994" step="0.0001" /></label>
+        <label>Target Distance (km) <input id="km" type="number" value="8" step="0.5" /></label>
+        <label>Options (2–3) <input id="options" type="number" value="3" min="2" max="3" /></label>
+        <button id="find">Find Routes</button>
+        <p class="note">This starter currently returns edge-based placeholders from the database.</p>
+        <ul id="routes"></ul>
+      </div>
+      <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script>
+      const map = new maplibregl.Map({
+        container: 'map',
+        style: 'https://demotiles.maplibre.org/style.json',
+        center: [-73.994, 40.734],
+        zoom: 13
+      });
+
+      map.on('load', () => {
+        map.addSource('routes', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] }
+        });
+
+        map.addLayer({
+          id: 'routes-line',
+          type: 'line',
+          source: 'routes',
+          paint: {
+            'line-width': 5,
+            'line-color': ['match', ['get', 'route_id'], 1, '#e74c3c', 2, '#2980b9', '#27ae60']
+          }
+        });
+      });
+
+      document.getElementById('find').addEventListener('click', async () => {
+        const payload = {
+          start_lat: Number(document.getElementById('lat').value),
+          start_lon: Number(document.getElementById('lon').value),
+          target_distance_km: Number(document.getElementById('km').value),
+          options: Number(document.getElementById('options').value)
+        };
+
+        const res = await fetch('/run-routes', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          alert(`Route request failed: ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+        const features = data.routes.map((r) => ({
+          type: 'Feature',
+          properties: { route_id: r.route_id, distance_m: r.distance_m },
+          geometry: r.geojson
+        }));
+
+        map.getSource('routes').setData({ type: 'FeatureCollection', features });
+
+        const ul = document.getElementById('routes');
+        ul.innerHTML = '';
+        data.routes.forEach((r) => {
+          const li = document.createElement('li');
+          li.textContent = `Route ${r.route_id}: ${(r.distance_m / 1000).toFixed(2)} km`;
+          ul.appendChild(li);
+        });
+      });
+    </script>
+  </body>
+</html>
